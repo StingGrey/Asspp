@@ -171,6 +171,12 @@ def prepare_build(root):
     compiler_version += subprocess.check_output([cmake, '--version'], text=True)
     target_key = 'MACOSX_DEPLOYMENT_TARGET' if platform == 'macosx' else 'IPHONEOS_DEPLOYMENT_TARGET'
     target = os.environ[target_key]
+    # qemu's configure only checks that pkg-config exists and never queries it.
+    # Without it, configure aborts, CMake carries on, and the build later fails
+    # with an unrelated Int128 typedef error.
+    environment = dict(os.environ)
+    if not shutil.which(environment.get('PKG_CONFIG', 'pkg-config')):
+        environment['PKG_CONFIG'] = '/usr/bin/true'
     libraries = []
     for arch in os.environ['ARCHS'].split():
         if arch not in ('arm64', 'x86_64'):
@@ -184,8 +190,10 @@ def prepare_build(root):
         if not stamp.is_file() or stamp.read_text() != signature:
             if build.exists():
                 shutil.rmtree(build)
-        subprocess.run(command, check=True)
-        subprocess.run([cmake, '--build', str(build), '-j', str(min(os.cpu_count() or 2, 8))], check=True)
+        subprocess.run(command, check=True, env=environment)
+        if not (build / 'config-host.mak').is_file():
+            raise RuntimeError('Unicorn configure failed; see config.log in the SAP build directory')
+        subprocess.run([cmake, '--build', str(build), '-j', str(min(os.cpu_count() or 2, 8))], check=True, env=environment)
         atomic_write(stamp, signature.encode())
         libraries.append(str(build / 'libunicorn.a'))
     if not libraries:
